@@ -1,0 +1,132 @@
+# vi: set ft=ruby :
+
+require 'yaml'
+require 'concurrent'
+#Vagrant.require_version ">= 1.6.0"
+
+VAGRANTFILE_API_VERSION = "2"
+instance_variables = YAML.load_file(File.join(File.dirname(__FILE__), 'instance_variables.yml'))
+scenario = YAML.load_file(File.join(File.dirname(__FILE__), "training_scenario_"+instance_variables["scenario_id"].to_s+".yml"))
+ENV['VAGRANT_DEFAULT_PROVIDER'] = 'docker'
+
+Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
+  i=0
+  novnc_port_array = instance_variables["novnc_port_list"]
+  novnc_port_array_final = Concurrent::Array.new(novnc_port_array)
+  ssh_port_array = instance_variables["ssh_port_list"]
+  ssh_port_array_final = Concurrent::Array.new(ssh_port_array)
+#   novnc_password_array = instance_variables["novnc_password_list"]
+#   novnc_password_array_final = Concurrent::Array.new(novnc_password_array)
+
+  # config.vbguest.auto_update = false
+  # puts instance_variables["network"]
+
+
+  # Scenario training components  imported from scenario.yml
+
+  scenario.each do |em_asset|
+
+    base_provision = em_asset["asset"]["base_provision"]
+    network_provision = em_asset["asset"]["network_provision"]
+    user_provision = em_asset["asset"]["user_provision"]
+    access_provision = em_asset["asset"]["access_provision"]
+    software_provision = em_asset["asset"]["software_provision"]
+    training_provision = em_asset["asset"]["training_provision"]
+    base_provision["hostname"] = base_provision["hostname"] +"_"+instance_variables["scenario_instance_id"].to_s
+    asset_novnc_port = novnc_port_array_final.pop
+    asset_ssh_port = ssh_port_array_final.pop
+#     asset_novnc_password = novnc_port_array_final.pop
+    # puts(asset_novnc_port)
+    # Asset deployment and configuration
+    config.vm.define base_provision["hostname"] do |node|
+
+
+       node.ssh.username="vagrant"
+       node.ssh.password ="vagrant"
+       node.ssh.keep_alive=true
+       # node.ssh.guest_port = asset_ssh_port
+
+       #node.ssh.verify_host_key: never
+       #node.ssh.forward_agent=true
+       #node.ssh.keys_only=false
+       node.ssh.insert_key=true
+
+
+#        node.vm.provision 'shell', run: "once", inline: "echo #{asset_novnc_password} | vncpasswd -f > /root/.vnc/passwd", privileged: false
+
+      #node.vm.box = base_provision["image"]
+
+      # ------- Network provision -------
+       network_provision.each do |net|
+         node.vm.network "private_network", type: "dhcp", name: net["name"]+"_"+instance_variables["scenario_instance_id"].to_s
+       end
+
+
+      node.vm.network "forwarded_port", guest:8080, host: asset_novnc_port, auto_correct: false
+      node.vm.network "forwarded_port", guest: 22, host: asset_ssh_port, id: "ssh", auto_correct: false
+      # node.vm.usable_port_range = (42000..44000)
+      # node.vm.network "forwarded_port", guest:8080, host: 44000+i+instance_variables["scenario_instance_id"]+10, auto_correct: true
+      # node.vm.network "forwarded_port", guest:5900, host: 44000+i+instance_variables["scenario_instance_id"]+10, auto_correct: true
+
+      node.vm.provider :docker do |d|
+        d.image =  base_provision["image"]
+        d.name = base_provision["hostname"]
+#         puts "[DEBUG] HOSTNAME: #{base_provision["hostname"]}"
+#         novnc_port = 9000+i+instance_variables["scenario_instance_id"]
+#         vnc_Port = 9020+i+instance_variables["scenario_instance_id"]
+#         d.ports = ["9020:8080"]
+#         d.ports = ["9021:5900"]
+        #d.build_dir = "."
+        #d.dockerfile = base_provision["dockerfile"]
+        #d.cmd = ["/bin/sh", "-l"]
+        d.has_ssh = true
+        d.create_args=["-it"]
+        d.remains_running = true
+
+#         d.cmd = ["apt","-yq", "update"]
+#         d.cmd = ["apt", "-yq", "install", "openssh-server", "&&", "/etc/init.d/ssh", "start", "&&", "/bin/bash"]
+#         d.cmd = ["tail", "-f", "/dev/null"]
+
+      end
+
+#        node.vm.provision "file", source: "/home/somarakis/letsencrypt/fullchain.pem", destination: "/etc/ssl/certs/novnc_cert.pem"
+#        node.vm.provision "file", source: "/home/somarakis/letsencrypt/privkey.pem", destination: "/etc/ssl/private/novnc_key.pem"
+
+      # Software provision
+      node.vm.provision "ansible" do |ansible|
+        ansible.verbose = "v"
+        ansible.playbook = "test_software_provision_playbook.yml"
+        ansible.extra_vars =
+        {
+          software_items: software_provision,
+          platform: "Linux"
+        }
+      end
+
+      # puts network_provision["ip"]
+      # User provision
+      node.vm.provision "ansible" do |ansible|
+        ansible.verbose = "v"
+        ansible.playbook = "test_user_provision_playbook.yml"
+        ansible.extra_vars =
+        {
+          user_items:user_provision,
+          access_items: access_provision,
+          platform:"Linux"
+        }
+      end
+
+      # Training provision
+      node.vm.provision "ansible" do |ansible|
+        ansible.verbose = "v"
+        ansible.playbook = "test_training_provision_playbook.yml"
+        ansible.extra_vars =
+        {
+          training_items: training_provision,
+          platform: "Linux",
+          progression_ip: instance_variables["training_progression_ip"]
+        }
+     end
+  end
+end
+end

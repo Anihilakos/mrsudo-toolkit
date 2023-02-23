@@ -1,0 +1,21 @@
+version: '3.9'
+networks:
+  trainingnet:
+    name: ${NETWORK}
+    driver: bridge
+  managementnet:
+    name: cyberrange-net
+    driver: bridge
+services:
+  progression:
+    container_name: progression_${SCENARIO_INSTANCE_ID}
+    build:
+      dockerfile: /home/othonas/simulation/DockerfileProgression
+      context: /home/othonas/simulation
+#    build: /home/othonas/simulation/progression/
+#    ports:
+#        - 127.0.0.1:${PROGRESSION_PORT}:8080
+    networks:
+        - trainingnet
+        - managementnet
+    restart: always
